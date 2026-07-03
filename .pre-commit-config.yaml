@@ -1,0 +1,13 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+  - repo: local
+    hooks:
+      - id: semgrep-security-scan
+        name: Local Semgrep Scan
+        entry: python .agents/scripts/mock_semgrep.py
+        language: system
+        files: \.(py)$
