@@ -358,9 +358,8 @@ async def read_root():
                 font-size: 1.05rem;
                 display: block;
                 max-width: 70%;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
+                white-space: normal;
+                word-break: break-word;
                 transition: color 0.2s;
             }
 
@@ -766,7 +765,7 @@ async def read_root():
                         <div class="empty-state">
                             <div class="checkmark-icon">✓</div>
                             <h3>All Clear</h3>
-                            <p>No pull requests awaiting approval</p>
+                            <p>No pull requests awaiting approval. The agent is actively monitoring.</p>
                         </div>
                     `;
                     return;
