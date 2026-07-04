@@ -251,7 +251,7 @@ index 012345..6789ab 100644
 # LlmAgents definitions using loaded skill instructions
 stride_analysis = LlmAgent(
     name="stride_analysis",
-    model="gemini-flash-latest",
+    model="gemini-1.5-flash",
     instruction=f"You are a threat modeler. Analyze the PR diff for STRIDE vulnerabilities.\n\nSkill Instructions:\n{load_skill_instruction('stride-threat-modeling')}",
     output_schema=StrideOutput,
     output_key="stride_result",
@@ -259,7 +259,7 @@ stride_analysis = LlmAgent(
 
 pr_summary = LlmAgent(
     name="pr_summary",
-    model="gemini-flash-latest",
+    model="gemini-1.5-flash",
     instruction=f"You are a code reviewer. Generate an executive summary of this PR.\n\nSkill Instructions:\n{load_skill_instruction('pr-executive-summary')}",
     output_schema=PRSummaryOutput,
     output_key="summary_result",

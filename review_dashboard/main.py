@@ -1,11 +1,14 @@
 import os
 import logging
+import base64
+import json
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from google.adk.sessions import VertexAiSessionService, Session
 from google.adk.events import Event
+from google.adk.events.event import Event as AdkEvent
 from google.genai import types
 
 # Configure logging
@@ -59,6 +62,14 @@ MOCK_SESSIONS = [
 class ActionRequest(BaseModel):
     decision: str  # "APPROVE" or "REJECT"
 
+# Webhook payload models
+class PubSubMessage(BaseModel):
+    data: str
+    messageId: str
+
+class PubSubEnvelope(BaseModel):
+    message: PubSubMessage
+
 # Session Service initialization
 session_service = None
 try:
@@ -83,6 +94,54 @@ def parse_severity(tech_review: str) -> str:
         return "APPROVE WITH CHANGES"
     return "APPROVE"
 
+@app.post("/api/webhook/review-request")
+async def pubsub_webhook(envelope: PubSubEnvelope):
+    import google.auth
+    import google.auth.transport.requests
+    import httpx
+
+    try:
+        # Decode the Pub/Sub message data
+        data_str = base64.b64decode(envelope.message.data).decode('utf-8')
+        payload = json.loads(data_str)
+        logger.info(f"Webhook received Pub/Sub payload: {payload}")
+
+        # Get standard Google credentials and refresh to get an OAuth2 access token
+        credentials, project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        auth_req = google.auth.transport.requests.Request()
+        credentials.refresh(auth_req)
+        token = credentials.token
+
+        # Construct the target Reasoning Engine :query URL
+        url = f"https://us-central1-aiplatform.googleapis.com/v1/{AGENT_RUNTIME_ID}:query"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+
+        # Specify the class_method and double-wrap the payload inside input.input
+        body = {
+            "class_method": "query",
+            "input": {
+                "input": json.dumps(payload)
+            }
+        }
+
+        logger.info(f"Forwarding trigger to Vertex AI Reasoning Engine: {url}")
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, json=body, headers=headers, timeout=120.0)
+            logger.info(f"Vertex AI response code: {res.status_code}, response: {res.text}")
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=f"Vertex AI error: {res.text}")
+
+        return {"status": "success", "message": "Successfully forwarded to Vertex AI Agent Runtime."}
+
+    except Exception as e:
+        logger.error(f"Error handling webhook: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/pending")
 async def get_pending_sessions():
     pending = []
@@ -91,7 +150,7 @@ async def get_pending_sessions():
     if session_service:
         try:
             # list_sessions is an async coroutine, so it must be awaited!
-            response = await session_service.list_sessions(app_name="code-review-agent")
+            response = await session_service.list_sessions(app_name="app")
             sessions: List[Session] = getattr(response, "sessions", [])
             for s in sessions:
                 is_pending = False
@@ -874,18 +933,6 @@ async def read_root():
                     element.disabled = false;
                     element.innerHTML = originalText;
                 }
-            }
-
-            function showToast(message, isError = false) {
-                const container = document.getElementById('toast-container');
-                const toast = document.createElement('div');
-                toast.className = 'toast';
-                if (isError) {
-                    toast.style.background = 'var(--danger)';
-                }
-                toast.innerText = message;
-                container.appendChild(toast);
-                setTimeout(() => toast.remove(), 4500);
             }
 
             function parseMarkdown(md) {
