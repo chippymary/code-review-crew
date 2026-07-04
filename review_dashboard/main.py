@@ -312,91 +312,66 @@ async def handle_action(session_id: str, payload: ActionRequest):
     if mock_found:
         return {"status": "success", "message": f"Mock session {session_id} updated with {payload.decision}."}
 
-    if session_service:
-        try:
-            decision_text = "Yes" if payload.decision.upper() == "APPROVE" else "No"
-            user_id = await find_session_user_id(session_id) or "default-user-id"
+    try:
+        decision_text = "Yes" if payload.decision.upper() == "APPROVE" else "No"
 
-            # 1. Fetch the full session to extract the latest event and its invocation_id
-            session = await session_service.get_session(
-                app_name="app",
-                user_id=user_id,
-                session_id=session_id
-            )
+        # Call Reasoning Engine streamQuery to resume the actual execution run.
+        # Reasoning Engine handles appending the event automatically during execution.
+        import google.auth
+        import google.auth.transport.requests
+        import httpx
 
-            latest_event = session.events[-1] if session.events else None
-            invocation_id = getattr(latest_event, "invocation_id", None) or str(uuid.uuid4())
+        credentials, project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        auth_req = google.auth.transport.requests.Request()
+        credentials.refresh(auth_req)
+        token = credentials.token
 
-            # 2. Append the event locally/internally via session service with required properties
-            user_event = Event(
-                author="user",
-                invocation_id=invocation_id,
-                content=types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=decision_text)]
-                )
-            )
-            await session_service.append_event(session=session, event=user_event)
-            await session_service.flush()
+        url = f"https://us-central1-aiplatform.googleapis.com/v1/{AGENT_RUNTIME_ID}:streamQuery"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
 
-            # 3. Query Reasoning Engine streamQuery to resume the actual execution run
-            import google.auth
-            import google.auth.transport.requests
-            import httpx
-
-            credentials, project = google.auth.default(
-                scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-            auth_req = google.auth.transport.requests.Request()
-            credentials.refresh(auth_req)
-            token = credentials.token
-
-            url = f"https://us-central1-aiplatform.googleapis.com/v1/{AGENT_RUNTIME_ID}:streamQuery"
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json"
+        agent_request = {
+            "session_id": session_id,
+            "message": {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": decision_text
+                    }
+                ]
             }
+        }
 
-            agent_request = {
-                "session_id": session_id,
-                "message": {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "text": decision_text
-                        }
-                    ]
-                }
+        body = {
+            "class_method": "streaming_agent_run_with_events",
+            "input": {
+                "request_json": json.dumps(agent_request)
             }
+        }
 
-            body = {
-                "class_method": "streaming_agent_run_with_events",
-                "input": {
-                    "request_json": json.dumps(agent_request)
-                }
-            }
+        logger.info(f"Forwarding resumption to Vertex AI reasoning engine: {url}")
+        async with httpx.AsyncClient() as client:
+            async with client.stream("POST", url, json=body, headers=headers, timeout=120.0) as response:
+                logger.info(f"Vertex AI resumption status: {response.status_code}")
+                if response.status_code >= 400:
+                    error_bytes = await response.aread()
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Vertex AI resumption error: {error_bytes.decode('utf-8')}"
+                    )
 
-            logger.info(f"Forwarding resumption to Vertex AI reasoning engine: {url}")
-            async with httpx.AsyncClient() as client:
-                async with client.stream("POST", url, json=body, headers=headers, timeout=120.0) as response:
-                    logger.info(f"Vertex AI resumption status: {response.status_code}")
-                    if response.status_code >= 400:
-                        error_bytes = await response.aread()
-                        raise HTTPException(
-                            status_code=response.status_code,
-                            detail=f"Vertex AI resumption error: {error_bytes.decode('utf-8')}"
-                        )
+                # Consume stream until the agent completes execution
+                async for line in response.aiter_lines():
+                    pass
 
-                    # Consume stream until the agent completes execution
-                    async for line in response.aiter_lines():
-                        pass
-
-            return {"status": "success", "message": f"Session {session_id} successfully resumed and executed with '{decision_text}'"}
-        except Exception as e:
-            logger.error(f"Failed to resume session {session_id} via API: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to resume session: {e}")
-
-    raise HTTPException(status_code=404, detail="Session not found or service unavailable.")
+        return {"status": "success", "message": f"Session {session_id} successfully resumed and executed with '{decision_text}'"}
+    except Exception as e:
+        logger.error(f"Failed to resume session {session_id} via API: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to resume session: {e}")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
