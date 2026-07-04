@@ -95,6 +95,18 @@ def parse_severity(tech_review: str) -> str:
         return "APPROVE WITH CHANGES"
     return "APPROVE"
 
+async def find_session_user_id(session_id: str) -> Optional[str]:
+    if session_service:
+        try:
+            response = await session_service.list_sessions(app_name="app")
+            sessions = getattr(response, "sessions", [])
+            for s in sessions:
+                if s.id == session_id:
+                    return s.user_id
+        except Exception as e:
+            logger.warning(f"Error looking up user_id for session {session_id}: {e}")
+    return None
+
 @app.post("/api/webhook/review-request")
 async def pubsub_webhook(envelope: PubSubEnvelope):
     import google.auth
@@ -180,26 +192,37 @@ async def get_pending_sessions():
             response = await session_service.list_sessions(app_name="app")
             sessions: List[Session] = getattr(response, "sessions", [])
             for s in sessions:
+                # Fetch the full session to populate s.events which list_sessions leaves empty
+                try:
+                    full_session = await session_service.get_session(
+                        app_name="app",
+                        user_id=s.user_id,
+                        session_id=s.id
+                    )
+                except Exception as ex:
+                    logger.warning(f"Could not load details for session {s.id}: {ex}")
+                    continue
+
                 is_pending = False
-                if s.events:
-                    latest_event: Event = s.events[-1]
+                if full_session.events:
+                    latest_event: Event = full_session.events[-1]
                     if getattr(latest_event, "interrupted", False):
                         is_pending = True
 
                 if is_pending:
-                    state = s.state or {}
+                    state = full_session.state or {}
                     pr_summary = state.get("pr_summary", {})
                     tech_review = state.get("technical_review", "")
 
                     time_str = "10:00"
                     try:
-                        if getattr(s, "last_update_time", None):
-                            time_str = s.last_update_time.strftime("%H:%M")
+                        if getattr(full_session, "last_update_time", None):
+                            time_str = full_session.last_update_time.strftime("%H:%M")
                     except Exception:
                         pass
 
                     pending.append({
-                        "session_id": s.id,
+                        "session_id": full_session.id,
                         "repo": state.get("repo", "unknown/repo"),
                         "pr_url": f"https://github.com/{state.get('repo', 'unknown')}/pull/{state.get('pr_number', 0)}",
                         "pr_number": state.get("pr_number", 0),
@@ -269,8 +292,13 @@ async def handle_action(session_id: str, payload: ActionRequest):
     if session_service:
         try:
             decision_text = "Yes" if payload.decision.upper() == "APPROVE" else "No"
+            user_id = await find_session_user_id(session_id) or "default-user-id"
             # get_session, append_event and flush are async coroutines so they must be awaited!
-            session = await session_service.get_session(session_id=session_id)
+            session = await session_service.get_session(
+                app_name="app",
+                user_id=user_id,
+                session_id=session_id
+            )
             user_event = Event(
                 content=types.Content(
                     role="user",
