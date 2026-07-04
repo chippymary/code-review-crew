@@ -313,10 +313,11 @@ async def handle_action(session_id: str, payload: ActionRequest):
         return {"status": "success", "message": f"Mock session {session_id} updated with {payload.decision}."}
 
     try:
-        decision_text = "Yes" if payload.decision.upper() == "APPROVE" else "No"
+        is_approved = payload.decision.upper() == "APPROVE"
+        decision_text = "Yes" if is_approved else "No"
 
         # Call Reasoning Engine streamQuery to resume the actual execution run.
-        # Reasoning Engine handles appending the event automatically during execution.
+        # Answer the adk_request_input interrupt call using a formal FunctionResponse payload.
         import google.auth
         import google.auth.transport.requests
         import httpx
@@ -340,7 +341,14 @@ async def handle_action(session_id: str, payload: ActionRequest):
                 "role": "user",
                 "parts": [
                     {
-                        "text": decision_text
+                        "function_response": {
+                            "name": "adk_request_input",
+                            "id": "approval",
+                            "response": {
+                                "approved": is_approved,
+                                "result": decision_text
+                            }
+                        }
                     }
                 ]
             }
