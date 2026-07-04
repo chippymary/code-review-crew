@@ -114,27 +114,37 @@ async def pubsub_webhook(envelope: PubSubEnvelope):
         credentials.refresh(auth_req)
         token = credentials.token
 
-        # Construct the target Reasoning Engine :query URL
-        url = f"https://us-central1-aiplatform.googleapis.com/v1/{AGENT_RUNTIME_ID}:query"
+        # Construct the target Reasoning Engine :streamQuery URL for streaming execution
+        url = f"https://us-central1-aiplatform.googleapis.com/v1/{AGENT_RUNTIME_ID}:streamQuery"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
 
-        # Specify the class_method and double-wrap the payload inside input.input
+        # Specify the streaming class method and double-wrap under request_json parameter
         body = {
-            "class_method": "submit",
+            "class_method": "streaming_agent_run_with_events",
             "input": {
-                "input": json.dumps(payload)
+                "request_json": json.dumps(payload)
             }
         }
 
         logger.info(f"Forwarding trigger to Vertex AI Reasoning Engine: {url}")
         async with httpx.AsyncClient() as client:
-            res = await client.post(url, json=body, headers=headers, timeout=120.0)
-            logger.info(f"Vertex AI response code: {res.status_code}, response: {res.text}")
-            if res.status_code >= 400:
-                raise HTTPException(status_code=res.status_code, detail=f"Vertex AI error: {res.text}")
+            async with client.stream("POST", url, json=body, headers=headers, timeout=120.0) as response:
+                logger.info(f"Vertex AI response status: {response.status_code}")
+                if response.status_code >= 400:
+                    error_bytes = await response.aread()
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Vertex AI error: {error_bytes.decode('utf-8')}"
+                    )
+
+                # Consume only the first line of the stream to confirm execution has started successfully.
+                # Since the agent halts at the approval gate, reading the entire stream would block indefinitely.
+                async for line in response.aiter_lines():
+                    logger.info(f"Agent stream connection established. First event: {line[:120]}...")
+                    break
 
         return {"status": "success", "message": "Successfully forwarded to Vertex AI Agent Runtime."}
 
