@@ -177,7 +177,7 @@ async def handle_action(session_id: str, payload: ActionRequest):
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    html_content = """
+    html_content = r"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
