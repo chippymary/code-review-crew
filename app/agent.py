@@ -248,18 +248,19 @@ index 012345..6789ab 100644
     return Event(output=redacted_diff, route="safe")
 
 
-# LlmAgents definitions using loaded skill instructions
+# Stride analysis model
 stride_analysis = LlmAgent(
     name="stride_analysis",
-    model="gemini-1.5-flash",
+    model="gemini-2.5-flash",
     instruction=f"You are a threat modeler. Analyze the PR diff for STRIDE vulnerabilities.\n\nSkill Instructions:\n{load_skill_instruction('stride-threat-modeling')}",
     output_schema=StrideOutput,
     output_key="stride_result",
 )
 
+# PR summary model
 pr_summary = LlmAgent(
     name="pr_summary",
-    model="gemini-1.5-flash",
+    model="gemini-2.5-flash",
     instruction=f"You are a code reviewer. Generate an executive summary of this PR.\n\nSkill Instructions:\n{load_skill_instruction('pr-executive-summary')}",
     output_schema=PRSummaryOutput,
     output_key="summary_result",
