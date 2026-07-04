@@ -29,37 +29,6 @@ LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 # Extract the numeric engine ID from the path if a path was provided
 engine_id = AGENT_RUNTIME_ID.split("/")[-1] if "/" in AGENT_RUNTIME_ID else AGENT_RUNTIME_ID
 
-# Mock database to allow local testing and fallbacks
-MOCK_SESSIONS = [
-    {
-        "session_id": "mock-session-1",
-        "repo": "google/adk",
-        "pr_url": "https://github.com/google/adk/pull/12",
-        "pr_number": 12,
-        "technical_review": "### STRIDE Security Findings\n\n- **[HIGH] Tampering** in `usb_handler.cc:42-58`:\n  *Threat:* Potential buffer overflow in USB connection packet parsing.\n  *Remediation:* Enforce size verification.\n\nRecommended Action: BLOCK",
-        "executive_summary": "This pull request refactors the JNI state lifecycle listener bindings and improves hardware connection recovery timeouts for Android 13+ devices.",
-        "timestamp": "09:15"
-    },
-    {
-        "session_id": "mock-session-2",
-        "repo": "firebase/auth",
-        "pr_url": "https://github.com/firebase/auth/pull/15",
-        "pr_number": 15,
-        "technical_review": "### STRIDE Security Findings\n\n- **[MEDIUM] Information Disclosure** in configuration:\n  *Threat:* Hardcoded testing PSK config detected.\n  *Remediation:* Load from environment dynamically.\n\nRecommended Action: APPROVE WITH CHANGES",
-        "executive_summary": "Integrates Firebase authentication flow, adds OAuth2 configuration endpoints, and migrates session storage to Redis.",
-        "timestamp": "11:42"
-    },
-    {
-        "session_id": "mock-session-3",
-        "repo": "chippymary/code-review-crew",
-        "pr_url": "https://github.com/chippymary/code-review-crew/pull/3",
-        "pr_number": 3,
-        "technical_review": "### STRIDE Security Findings\n\nNo security vulnerabilities or leaks identified in this change. Code complies with CONTEXT.md guidelines.\n\nRecommended Action: APPROVE",
-        "executive_summary": "Initial pipeline setup for OIDC and Cloud Run dashboard.",
-        "timestamp": "12:05"
-    }
-]
-
 class ActionRequest(BaseModel):
     decision: str  # "APPROVE" or "REJECT"
 
@@ -82,7 +51,7 @@ try:
         )
         logger.info(f"Initialized VertexAiSessionService for project={GOOGLE_CLOUD_PROJECT}, engine_id={engine_id}")
 except Exception as e:
-    logger.warning(f"Could not initialize VertexAiSessionService: {e}. Falling back to mock sessions.")
+    logger.warning(f"Could not initialize VertexAiSessionService: {e}")
 
 def parse_severity(tech_review: str) -> str:
     # Check for keywords inside the findings
@@ -254,42 +223,7 @@ async def get_pending_sessions():
                         "timestamp": time_str
                     })
         except Exception as e:
-            logger.warning(f"Error querying Vertex AI Session Service: {e}. Using mock fallback.")
-
-    # If no real sessions found, fallback to mock list for demo
-    if not pending:
-        global MOCK_SESSIONS
-        if not MOCK_SESSIONS:
-            MOCK_SESSIONS = [
-                {
-                    "session_id": "mock-session-1",
-                    "repo": "google/adk",
-                    "pr_url": "https://github.com/google/adk/pull/12",
-                    "pr_number": 12,
-                    "technical_review": "### STRIDE Security Findings\n\n- **[HIGH] Tampering** in `usb_handler.cc:42-58`:\n  *Threat:* Potential buffer overflow in USB connection packet parsing.\n  *Remediation:* Enforce size verification.\n\nRecommended Action: BLOCK",
-                    "executive_summary": "This pull request refactors the JNI state lifecycle listener bindings and improves hardware connection recovery timeouts for Android 13+ devices.",
-                    "timestamp": "09:15"
-                },
-                {
-                    "session_id": "mock-session-2",
-                    "repo": "firebase/auth",
-                    "pr_url": "https://github.com/firebase/auth/pull/15",
-                    "pr_number": 15,
-                    "technical_review": "### STRIDE Security Findings\n\n- **[MEDIUM] Information Disclosure** in configuration:\n  *Threat:* Hardcoded testing PSK config detected.\n  *Remediation:* Load from environment dynamically.\n\nRecommended Action: APPROVE WITH CHANGES",
-                    "executive_summary": "Integrates Firebase authentication flow, adds OAuth2 configuration endpoints, and migrates session storage to Redis.",
-                    "timestamp": "11:42"
-                },
-                {
-                    "session_id": "mock-session-3",
-                    "repo": "chippymary/code-review-crew",
-                    "pr_url": "https://github.com/chippymary/code-review-crew/pull/3",
-                    "pr_number": 3,
-                    "technical_review": "### STRIDE Security Findings\n\nNo security vulnerabilities or leaks identified in this change. Code complies with CONTEXT.md guidelines.\n\nRecommended Action: APPROVE",
-                    "executive_summary": "Initial pipeline setup for OIDC and Cloud Run dashboard.",
-                    "timestamp": "12:05"
-                }
-            ]
-        pending = MOCK_SESSIONS
+            logger.warning(f"Error querying Vertex AI Session Service: {e}.")
 
     # Append severity badge value to each response dict
     for p in pending:
@@ -300,17 +234,6 @@ async def get_pending_sessions():
 @app.post("/api/action/{session_id}")
 async def handle_action(session_id: str, payload: ActionRequest):
     logger.info(f"Received decision '{payload.decision}' for session '{session_id}'")
-
-    global MOCK_SESSIONS
-    mock_found = False
-    for i, s in enumerate(MOCK_SESSIONS):
-        if s["session_id"] == session_id:
-            MOCK_SESSIONS.pop(i)
-            mock_found = True
-            break
-
-    if mock_found:
-        return {"status": "success", "message": f"Mock session {session_id} updated with {payload.decision}."}
 
     try:
         is_approved = payload.decision.upper() == "APPROVE"
