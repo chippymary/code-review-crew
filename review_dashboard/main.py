@@ -912,6 +912,9 @@ async def read_root():
         <script>
             let currentSessionId = null;
 
+            // Global storage to avoid string escaping issues in inline HTML events
+            window.PENDING_REVIEWS = {};
+
             async function fetchPending() {
                 try {
                     const response = await fetch('/api/pending');
@@ -945,6 +948,12 @@ async def read_root():
                 const grid = document.getElementById('cards-grid');
                 const badge = document.getElementById('pending-count');
                 badge.innerText = `${sessions.length} pending review${sessions.length !== 1 ? 's' : ''}`;
+
+                // Clear and re-populate global storage
+                window.PENDING_REVIEWS = {};
+                sessions.forEach(s => {
+                    window.PENDING_REVIEWS[s.session_id] = s.technical_review;
+                });
 
                 if (sessions.length === 0) {
                     grid.innerHTML = `
@@ -983,7 +992,7 @@ async def read_root():
                         <div class="card-meta">
                             <span class="timestamp">Waiting since ${session.timestamp}</span>
                             <div class="actions">
-                                <button class="btn-approve" onclick="openApproveModal('${session.session_id}', '${session.pr_number}', '${encodeURIComponent(session.technical_review)}')">
+                                <button class="btn-approve" onclick="openApproveModal('${session.session_id}', '${session.pr_number}')">
                                     Approve
                                 </button>
                                 <button class="btn-reject" onclick="takeAction('${session.session_id}', 'REJECT', this)">
@@ -995,12 +1004,12 @@ async def read_root():
                 `).join('');
             }
 
-            function openApproveModal(sessionId, prNumber, encodedReview) {
+            function openApproveModal(sessionId, prNumber) {
                 currentSessionId = sessionId;
                 document.getElementById('modal-pr-title').innerText = `Technical Review for PR #${prNumber}`;
 
-                const markdown = decodeURIComponent(encodedReview);
-                document.getElementById('modal-content').innerHTML = parseMarkdown(markdown);
+                const reviewText = window.PENDING_REVIEWS[sessionId] || 'No technical review available.';
+                document.getElementById('modal-content').innerHTML = parseMarkdown(reviewText);
 
                 const approveBtn = document.getElementById('modal-approve-btn');
                 // Reset spinner state & disabled state on opening the modal
