@@ -123,7 +123,7 @@ async def pubsub_webhook(envelope: PubSubEnvelope):
 
         # Specify the class_method and double-wrap the payload inside input.input
         body = {
-            "class_method": "run",
+            "class_method": "submit",
             "input": {
                 "input": json.dumps(payload)
             }
