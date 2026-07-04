@@ -2,6 +2,7 @@ import os
 import logging
 import base64
 import json
+import uuid
 from typing import Optional, List
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -121,11 +122,27 @@ async def pubsub_webhook(envelope: PubSubEnvelope):
             "Content-Type": "application/json"
         }
 
+        # Generate a unique session ID to enforce persistent session storage on Vertex AI
+        session_uuid = str(uuid.uuid4())
+
+        # Construct the structured _StreamRunRequest payload
+        agent_request = {
+            "session_id": f"sess-{session_uuid}",
+            "message": {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": json.dumps(payload)
+                    }
+                ]
+            }
+        }
+
         # Specify the streaming class method and double-wrap under request_json parameter
         body = {
             "class_method": "streaming_agent_run_with_events",
             "input": {
-                "request_json": json.dumps(payload)
+                "request_json": json.dumps(agent_request)
             }
         }
 
