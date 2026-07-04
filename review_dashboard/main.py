@@ -6,7 +6,6 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from google.adk.sessions import VertexAiSessionService, Session
 from google.adk.events import Event
-from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 # Configure logging
@@ -16,48 +15,70 @@ logger = logging.getLogger("dashboard")
 app = FastAPI(title="Code Review Crew — Manager Dashboard")
 
 # Read environment variables
-GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0223097535")
-AGENT_RUNTIME_ID = os.getenv("AGENT_RUNTIME_ID", "code-review-agent")
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "project-c2b2c72a-4fa3-45ab-b72")
+AGENT_RUNTIME_ID = os.getenv(
+    "AGENT_RUNTIME_ID",
+    "projects/514276508634/locations/us-central1/reasoningEngines/5049571471991504896"
+)
 LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 # Mock database to allow local testing and fallbacks
 MOCK_SESSIONS = [
     {
         "session_id": "mock-session-1",
+        "repo": "google/adk",
         "pr_url": "https://github.com/google/adk/pull/12",
         "pr_number": 12,
-        "technical_review": "### STRIDE Security Findings\n\n- **[HIGH] Tampering** in `usb_handler.cc:42-58`:\n  *Threat:* Potential buffer overflow in USB connection packet parsing.\n  *Remediation:* Enforce strict size verification on the payload header length.\n\n- **[MEDIUM] Information Disclosure** in `adk_config.json:14`:\n  *Threat:* Hardcoded default pre-shared key (PSK) found in configuration template.\n  *Remediation:* Load configurations from environmental variables dynamically.",
+        "technical_review": "### STRIDE Security Findings\n\n- **[HIGH] Tampering** in `usb_handler.cc:42-58`:\n  *Threat:* Potential buffer overflow in USB connection packet parsing.\n  *Remediation:* Enforce size verification.\n\nRecommended Action: BLOCK",
         "executive_summary": "This pull request refactors the JNI state lifecycle listener bindings and improves hardware connection recovery timeouts for Android 13+ devices.",
+        "timestamp": "09:15"
     },
     {
         "session_id": "mock-session-2",
-        "pr_url": "https://github.com/google/adk/pull/15",
+        "repo": "firebase/auth",
+        "pr_url": "https://github.com/firebase/auth/pull/15",
         "pr_number": 15,
-        "technical_review": "### STRIDE Security Findings\n\nNo security vulnerabilities or leaks identified in this change. Code complies with CONTEXT.md guidelines.",
+        "technical_review": "### STRIDE Security Findings\n\n- **[MEDIUM] Information Disclosure** in configuration:\n  *Threat:* Hardcoded testing PSK config detected.\n  *Remediation:* Load from environment dynamically.\n\nRecommended Action: APPROVE WITH CHANGES",
         "executive_summary": "Integrates Firebase authentication flow, adds OAuth2 configuration endpoints, and migrates session storage to Redis.",
+        "timestamp": "11:42"
     },
+    {
+        "session_id": "mock-session-3",
+        "repo": "chippymary/code-review-crew",
+        "pr_url": "https://github.com/chippymary/code-review-crew/pull/3",
+        "pr_number": 3,
+        "technical_review": "### STRIDE Security Findings\n\nNo security vulnerabilities or leaks identified in this change. Code complies with CONTEXT.md guidelines.\n\nRecommended Action: APPROVE",
+        "executive_summary": "Initial pipeline setup for OIDC and Cloud Run dashboard.",
+        "timestamp": "12:05"
+    }
 ]
-
 
 class ActionRequest(BaseModel):
     decision: str  # "APPROVE" or "REJECT"
-
 
 # Session Service initialization
 session_service = None
 try:
     if GOOGLE_CLOUD_PROJECT and AGENT_RUNTIME_ID:
         session_service = VertexAiSessionService(
-            project=GOOGLE_CLOUD_PROJECT, location=LOCATION, app_name=AGENT_RUNTIME_ID
+            project=GOOGLE_CLOUD_PROJECT,
+            location=LOCATION,
+            app_name=AGENT_RUNTIME_ID
         )
-        logger.info(
-            f"Initialized VertexAiSessionService for project={GOOGLE_CLOUD_PROJECT}, app={AGENT_RUNTIME_ID}"
-        )
+        logger.info(f"Initialized VertexAiSessionService for project={GOOGLE_CLOUD_PROJECT}, app={AGENT_RUNTIME_ID}")
 except Exception as e:
-    logger.warning(
-        f"Could not initialize VertexAiSessionService: {e}. Falling back to mock sessions."
-    )
+    logger.warning(f"Could not initialize VertexAiSessionService: {e}. Falling back to mock sessions.")
 
+def parse_severity(tech_review: str) -> str:
+    lines = [line.strip() for line in tech_review.split("\n") if line.strip()]
+    if not lines:
+        return "APPROVE"
+    last_line = lines[-1].upper()
+    if "BLOCK" in last_line:
+        return "BLOCK"
+    elif "APPROVE WITH CHANGES" in last_line:
+        return "APPROVE WITH CHANGES"
+    return "APPROVE"
 
 @app.get("/api/pending")
 async def get_pending_sessions():
@@ -66,11 +87,9 @@ async def get_pending_sessions():
     # Try querying Vertex AI Session Service if initialized
     if session_service:
         try:
-            # list_sessions returns a ListSessionsResponse containing list of Session objects
             response = session_service.list_sessions(app_name=AGENT_RUNTIME_ID)
             sessions: List[Session] = getattr(response, "sessions", [])
             for s in sessions:
-                # Check if session has unresolved adk_request_input/interrupted state
                 is_pending = False
                 if s.events:
                     latest_event: Event = s.events[-1]
@@ -79,57 +98,73 @@ async def get_pending_sessions():
 
                 if is_pending:
                     state = s.state or {}
-                    # Extract variables from workflow state
                     pr_summary = state.get("pr_summary", {})
                     tech_review = state.get("technical_review", "")
 
-                    pending.append(
-                        {
-                            "session_id": s.id,
-                            "pr_url": f"https://github.com/{state.get('repo', 'unknown')}/pull/{state.get('pr_number', 0)}",
-                            "pr_number": state.get("pr_number", 0),
-                            "technical_review": tech_review
-                            or "No technical review available.",
-                            "executive_summary": pr_summary.get(
-                                "purpose", "No summary available."
-                            ),
-                        }
-                    )
-        except Exception as e:
-            logger.warning(
-                f"Error querying Vertex AI Session Service: {e}. Using mock fallback."
-            )
+                    time_str = "10:00"
+                    try:
+                        if getattr(s, "last_update_time", None):
+                            time_str = s.last_update_time.strftime("%H:%M")
+                    except Exception:
+                        pass
 
-    # If no real sessions found, fallback to mock list for demo / offline playground testing
+                    pending.append({
+                        "session_id": s.id,
+                        "repo": state.get("repo", "unknown/repo"),
+                        "pr_url": f"https://github.com/{state.get('repo', 'unknown')}/pull/{state.get('pr_number', 0)}",
+                        "pr_number": state.get("pr_number", 0),
+                        "technical_review": tech_review or "No technical review available.",
+                        "executive_summary": pr_summary.get("purpose", "No summary available."),
+                        "timestamp": time_str
+                    })
+        except Exception as e:
+            logger.warning(f"Error querying Vertex AI Session Service: {e}. Using mock fallback.")
+
+    # If no real sessions found, fallback to mock list for demo
     if not pending:
         global MOCK_SESSIONS
         if not MOCK_SESSIONS:
             MOCK_SESSIONS = [
                 {
                     "session_id": "mock-session-1",
+                    "repo": "google/adk",
                     "pr_url": "https://github.com/google/adk/pull/12",
                     "pr_number": 12,
-                    "technical_review": "### STRIDE Security Findings\n\n- **[HIGH] Tampering** in `usb_handler.cc:42-58`:\n  *Threat:* Potential buffer overflow in USB connection packet parsing.\n  *Remediation:* Enforce strict size verification on the payload header length.\n\n- **[MEDIUM] Information Disclosure** in `adk_config.json:14`:\n  *Threat:* Hardcoded default pre-shared key (PSK) found in configuration template.\n  *Remediation:* Load configurations from environmental variables dynamically.",
-                    "executive_summary": "This pull request refactors the JNI state lifecycle listener bindings and improves hardware connection recovery timeouts for Android 13+ devices."
+                    "technical_review": "### STRIDE Security Findings\n\n- **[HIGH] Tampering** in `usb_handler.cc:42-58`:\n  *Threat:* Potential buffer overflow in USB connection packet parsing.\n  *Remediation:* Enforce size verification.\n\nRecommended Action: BLOCK",
+                    "executive_summary": "This pull request refactors the JNI state lifecycle listener bindings and improves hardware connection recovery timeouts for Android 13+ devices.",
+                    "timestamp": "09:15"
                 },
                 {
                     "session_id": "mock-session-2",
-                    "pr_url": "https://github.com/google/adk/pull/15",
+                    "repo": "firebase/auth",
+                    "pr_url": "https://github.com/firebase/auth/pull/15",
                     "pr_number": 15,
-                    "technical_review": "### STRIDE Security Findings\n\nNo security vulnerabilities or leaks identified in this change. Code complies with CONTEXT.md guidelines.",
-                    "executive_summary": "Integrates Firebase authentication flow, adds OAuth2 configuration endpoints, and migrates session storage to Redis."
+                    "technical_review": "### STRIDE Security Findings\n\n- **[MEDIUM] Information Disclosure** in configuration:\n  *Threat:* Hardcoded testing PSK config detected.\n  *Remediation:* Load from environment dynamically.\n\nRecommended Action: APPROVE WITH CHANGES",
+                    "executive_summary": "Integrates Firebase authentication flow, adds OAuth2 configuration endpoints, and migrates session storage to Redis.",
+                    "timestamp": "11:42"
+                },
+                {
+                    "session_id": "mock-session-3",
+                    "repo": "chippymary/code-review-crew",
+                    "pr_url": "https://github.com/chippymary/code-review-crew/pull/3",
+                    "pr_number": 3,
+                    "technical_review": "### STRIDE Security Findings\n\nNo security vulnerabilities or leaks identified in this change. Code complies with CONTEXT.md guidelines.\n\nRecommended Action: APPROVE",
+                    "executive_summary": "Initial pipeline setup for OIDC and Cloud Run dashboard.",
+                    "timestamp": "12:05"
                 }
             ]
         pending = MOCK_SESSIONS
 
-    return pending
+    # Append severity badge value to each response dict
+    for p in pending:
+        p["severity"] = parse_severity(p["technical_review"])
 
+    return pending
 
 @app.post("/api/action/{session_id}")
 async def handle_action(session_id: str, payload: ActionRequest):
     logger.info(f"Received decision '{payload.decision}' for session '{session_id}'")
 
-    # If it's a mock session, remove it from the mock database list and return
     global MOCK_SESSIONS
     mock_found = False
     for i, s in enumerate(MOCK_SESSIONS):
@@ -139,41 +174,26 @@ async def handle_action(session_id: str, payload: ActionRequest):
             break
 
     if mock_found:
-        return {
-            "status": "success",
-            "message": f"Mock session {session_id} updated with {payload.decision}.",
-        }
+        return {"status": "success", "message": f"Mock session {session_id} updated with {payload.decision}."}
 
-    # If it is a real session, resume it using the ADK agent engine interface
     if session_service:
         try:
-            # Map frontend APPROVE/REJECT to the exact match string expected by request_approval node
             decision_text = "Yes" if payload.decision.upper() == "APPROVE" else "No"
-
-            # Since the service is deployed to reasoning engines, we resume using the Vertex AI client or Runner:
-            # For this exercise, we simulation-resume by appending the user message event
             session = session_service.get_session(session_id=session_id)
             user_event = Event(
                 content=types.Content(
-                    role="user", parts=[types.Part.from_text(text=decision_text)]
+                    role="user",
+                    parts=[types.Part.from_text(text=decision_text)]
                 )
             )
             session_service.append_event(session=session, event=user_event)
             session_service.flush()
-            return {
-                "status": "success",
-                "message": f"Session {session_id} resumed with '{decision_text}'",
-            }
+            return {"status": "success", "message": f"Session {session_id} resumed with '{decision_text}'"}
         except Exception as e:
             logger.error(f"Failed to resume session {session_id} via API: {e}")
-            raise HTTPException(
-                status_code=500, detail=f"Failed to resume session: {e}"
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to resume session: {e}")
 
-    raise HTTPException(
-        status_code=404, detail="Session not found or service unavailable."
-    )
-
+    raise HTTPException(status_code=404, detail="Session not found or service unavailable.")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
@@ -197,6 +217,7 @@ async def read_root():
                 --accent-hover: #4f46e5;
                 --success: #10b981;
                 --danger: #ef4444;
+                --warning: #f59e0b;
             }
 
             * {
@@ -210,16 +231,27 @@ async def read_root():
                 background: var(--bg-gradient);
                 color: var(--text-primary);
                 min-height: 100vh;
-                overflow-x: hidden;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
                 padding: 2.5rem 1.5rem;
             }
 
             header {
                 max-width: 1200px;
-                margin: 0 auto 3rem auto;
+                margin: 0 auto 1.5rem auto;
+                width: 100%;
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
+            }
+
+            .header-divider {
+                max-width: 1200px;
+                margin: 0 auto 2.5rem auto;
+                width: 100%;
+                height: 1px;
+                background: rgba(255, 255, 255, 0.08);
             }
 
             h1 {
@@ -229,6 +261,44 @@ async def read_root():
                 background: linear-gradient(to right, #818cf8, #c084fc);
                 -webkit-background-clip: text;
                 -webkit-text-fill-color: transparent;
+            }
+
+            /* Live status indicator */
+            .status-indicator {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                font-size: 0.875rem;
+                font-weight: 500;
+                color: #38bdf8;
+                background: rgba(56, 189, 248, 0.1);
+                border: 1px solid rgba(56, 189, 248, 0.2);
+                padding: 0.5rem 1rem;
+                border-radius: 9999px;
+            }
+
+            .pulse-dot {
+                width: 8px;
+                height: 8px;
+                background-color: var(--success);
+                border-radius: 50%;
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+                animation: pulse 1.6s infinite;
+            }
+
+            @keyframes pulse {
+                0% {
+                    transform: scale(0.95);
+                    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+                }
+                70% {
+                    transform: scale(1);
+                    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+                }
+                100% {
+                    transform: scale(0.95);
+                    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+                }
             }
 
             .badge {
@@ -244,6 +314,8 @@ async def read_root():
             main {
                 max-width: 1200px;
                 margin: 0 auto;
+                width: 100%;
+                flex-grow: 1;
             }
 
             .grid {
@@ -263,6 +335,7 @@ async def read_root():
                 justify-content: space-between;
                 box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
                 transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+                position: relative;
             }
 
             .card:hover {
@@ -275,17 +348,19 @@ async def read_root():
                 display: flex;
                 justify-content: space-between;
                 align-items: flex-start;
-                margin-bottom: 1rem;
+                margin-bottom: 0.75rem;
             }
 
             .pr-link {
                 color: #818cf8;
                 text-decoration: none;
                 font-weight: 600;
-                font-size: 1.1rem;
-                display: flex;
-                align-items: center;
-                gap: 0.5rem;
+                font-size: 1.05rem;
+                display: block;
+                max-width: 70%;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
                 transition: color 0.2s;
             }
 
@@ -293,36 +368,102 @@ async def read_root():
                 color: #a5b4fc;
             }
 
-            .pr-num {
-                background: rgba(255, 255, 255, 0.08);
-                border: 1px solid var(--glass-border);
+            .severity-badge {
                 padding: 0.25rem 0.6rem;
                 border-radius: 6px;
                 font-size: 0.75rem;
-                font-weight: 600;
-                color: var(--text-secondary);
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }
+
+            .severity-block {
+                background: rgba(239, 68, 68, 0.15);
+                border: 1px solid rgba(239, 68, 68, 0.4);
+                color: #fca5a5;
+            }
+
+            .severity-changes {
+                background: rgba(245, 158, 11, 0.15);
+                border: 1px solid rgba(245, 158, 11, 0.4);
+                color: #fcd34d;
+            }
+
+            .severity-approve {
+                background: rgba(16, 185, 129, 0.15);
+                border: 1px solid rgba(16, 185, 129, 0.4);
+                color: #6ee7b7;
             }
 
             .summary {
                 font-size: 0.95rem;
                 color: var(--text-secondary);
                 line-height: 1.6;
-                margin-bottom: 1.75rem;
-                flex-grow: 1;
+                margin-bottom: 1rem;
+            }
+
+            /* Expandable Review block */
+            .expand-link {
+                color: #a5b4fc;
+                font-size: 0.85rem;
+                font-weight: 600;
+                text-decoration: none;
+                cursor: pointer;
+                display: inline-block;
+                margin-bottom: 1.25rem;
+                transition: color 0.2s;
+            }
+
+            .expand-link:hover {
+                color: #c084fc;
+            }
+
+            .expandable-content {
+                display: none;
+                background: rgba(15, 23, 42, 0.6);
+                border-radius: 8px;
+                padding: 1rem;
+                margin-bottom: 1.25rem;
+                font-size: 0.875rem;
+                color: var(--text-secondary);
+                max-height: 220px;
+                overflow-y: auto;
+                border: 1px solid rgba(255, 255, 255, 0.04);
+            }
+
+            .expandable-content.active {
+                display: block;
+            }
+
+            .card-meta {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-top: auto;
+                padding-top: 1rem;
+                border-top: 1px solid rgba(255, 255, 255, 0.05);
+            }
+
+            .timestamp {
+                font-size: 0.775rem;
+                color: var(--text-secondary);
+                font-weight: 500;
             }
 
             .actions {
                 display: flex;
                 gap: 1rem;
+                flex: 1;
+                margin-left: 1rem;
             }
 
             button {
                 flex: 1;
-                padding: 0.8rem;
+                padding: 0.7rem;
                 border: none;
                 border-radius: 10px;
                 font-weight: 600;
-                font-size: 0.95rem;
+                font-size: 0.9rem;
                 cursor: pointer;
                 display: flex;
                 align-items: center;
@@ -351,15 +492,13 @@ async def read_root():
                 color: var(--text-primary);
             }
 
-            /* Loader Spinner */
             .spinner {
-                width: 16px;
-                height: 16px;
+                width: 14px;
+                height: 14px;
                 border: 2px solid currentColor;
                 border-bottom-color: transparent;
                 border-radius: 50%;
                 display: inline-block;
-                box-sizing: border-box;
                 animation: rotation 1s linear infinite;
             }
 
@@ -368,7 +507,7 @@ async def read_root():
                 100% { transform: rotate(360deg); }
             }
 
-            /* Side Sheet Panel Modal */
+            /* Modal */
             .modal-overlay {
                 position: fixed;
                 top: 0;
@@ -436,21 +575,6 @@ async def read_root():
                 line-height: 1.7;
             }
 
-            .modal-body h3 {
-                color: var(--text-primary);
-                margin: 1.5rem 0 0.8rem 0;
-                font-size: 1.15rem;
-            }
-
-            .modal-body ul {
-                padding-left: 1.25rem;
-                margin-bottom: 1.5rem;
-            }
-
-            .modal-body li {
-                margin-bottom: 0.5rem;
-            }
-
             /* Toasts */
             .toast-container {
                 position: fixed;
@@ -482,6 +606,7 @@ async def read_root():
                 to { transform: translateY(-50px); opacity: 0; }
             }
 
+            /* Empty Clear State with Pulse Animation */
             .empty-state {
                 text-align: center;
                 padding: 5rem 2rem;
@@ -489,11 +614,67 @@ async def read_root():
                 border: 1px dashed var(--glass-border);
                 border-radius: 16px;
                 grid-column: 1 / -1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .checkmark-icon {
+                font-size: 3.5rem;
+                color: var(--success);
+                margin-bottom: 1rem;
+                animation: pulse-green 2s infinite;
+            }
+
+            @keyframes pulse-green {
+                0% {
+                    transform: scale(0.95);
+                    text-shadow: 0 0 0 rgba(16, 185, 129, 0.4);
+                }
+                70% {
+                    transform: scale(1.05);
+                    text-shadow: 0 0 15px rgba(16, 185, 129, 0.6);
+                }
+                100% {
+                    transform: scale(0.95);
+                    text-shadow: 0 0 0 rgba(16, 185, 129, 0);
+                }
+            }
+
+            .empty-state h3 {
+                font-size: 1.5rem;
+                font-weight: 700;
+                margin-bottom: 0.5rem;
+                color: var(--text-primary);
             }
 
             .empty-state p {
                 color: var(--text-secondary);
-                font-size: 1.1rem;
+                font-size: 0.95rem;
+            }
+
+            /* Footer */
+            footer {
+                width: 100%;
+                text-align: center;
+                padding-top: 3rem;
+                margin-top: 3rem;
+                border-top: 1px solid rgba(255, 255, 255, 0.05);
+                font-size: 0.85rem;
+                color: var(--text-secondary);
+                line-height: 1.6;
+            }
+
+            footer a {
+                color: #818cf8;
+                text-decoration: none;
+                font-weight: 600;
+                transition: color 0.2s;
+            }
+
+            footer a:hover {
+                color: #a5b4fc;
             }
         </style>
     </head>
@@ -503,8 +684,16 @@ async def read_root():
                 <h1>Code Review Crew</h1>
                 <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.25rem;">Ambient Pull Request Review Approvals Manager</p>
             </div>
+
+            <div class="status-indicator">
+                <div class="pulse-dot"></div>
+                <span>Agent Runtime: Live</span>
+            </div>
+
             <div class="badge" id="pending-count">0 pending reviews</div>
         </header>
+
+        <div class="header-divider"></div>
 
         <main>
             <div class="grid" id="cards-grid">
@@ -529,6 +718,12 @@ async def read_root():
 
         <div class="toast-container" id="toast-container"></div>
 
+        <footer>
+            <p>Built with Google ADK 2.0 &middot; Antigravity &middot; Agent Runtime</p>
+            <p>Code Repository: <a href="https://github.com/chippymary/code-review-crew" target="_blank">chippymary/code-review-crew</a></p>
+            <p style="margin-top: 0.25rem; font-size: 0.775rem; opacity: 0.8;">Kaggle 5-Day AI Agents Capstone 2026</p>
+        </footer>
+
         <script>
             let currentSessionId = null;
 
@@ -542,6 +737,25 @@ async def read_root():
                 }
             }
 
+            function getSeverityClass(severity) {
+                if (severity === 'BLOCK') return 'severity-block';
+                if (severity === 'APPROVE WITH CHANGES') return 'severity-changes';
+                return 'severity-approve';
+            }
+
+            function toggleExpand(sessionId, event) {
+                if (event) event.preventDefault();
+                const contentDiv = document.getElementById(`expand-${sessionId}`);
+                const link = document.getElementById(`link-${sessionId}`);
+                if (contentDiv.classList.contains('active')) {
+                    contentDiv.classList.remove('active');
+                    link.innerText = "View Full Technical Review ▼";
+                } else {
+                    contentDiv.classList.add('active');
+                    link.innerText = "Hide Technical Review ▲";
+                }
+            }
+
             function renderCards(sessions) {
                 const grid = document.getElementById('cards-grid');
                 const badge = document.getElementById('pending-count');
@@ -550,7 +764,9 @@ async def read_root():
                 if (sessions.length === 0) {
                     grid.innerHTML = `
                         <div class="empty-state">
-                            <p>All reviews are up to date! Waiting for new Pull Requests...</p>
+                            <div class="checkmark-icon">✓</div>
+                            <h3>All Clear</h3>
+                            <p>No pull requests awaiting approval</p>
                         </div>
                     `;
                     return;
@@ -560,23 +776,35 @@ async def read_root():
                     <div class="card" id="card-${session.session_id}">
                         <div>
                             <div class="card-header">
-                                <a href="${session.pr_url}" target="_blank" class="pr-link">
-                                    PR: #${session.pr_number} ↗
+                                <a href="${session.pr_url}" target="_blank" class="pr-link" title="${session.repo} — PR #${session.pr_number}">
+                                    ${session.repo} — PR #${session.pr_number}
                                 </a>
-                                <span class="pr-num">ID: ${session.session_id.substring(0, 8)}</span>
+                                <span class="severity-badge ${getSeverityClass(session.severity)}">${session.severity}</span>
                             </div>
                             <div class="summary">
                                 <strong>Executive Summary:</strong><br>
                                 ${session.executive_summary}
                             </div>
+
+                            <!-- Inline Expandable Review -->
+                            <a class="expand-link" id="link-${session.session_id}" onclick="toggleExpand('${session.session_id}', event)">
+                                View Full Technical Review ▼
+                            </a>
+                            <div class="expandable-content" id="expand-${session.session_id}">
+                                ${parseMarkdown(session.technical_review)}
+                            </div>
                         </div>
-                        <div class="actions">
-                            <button class="btn-approve" onclick="openApproveModal('${session.session_id}', '${session.pr_number}', \`${encodeURIComponent(session.technical_review)}\`)">
-                                Approve
-                            </button>
-                            <button class="btn-reject" onclick="takeAction('${session.session_id}', 'REJECT', this)">
-                                Reject
-                            </button>
+
+                        <div class="card-meta">
+                            <span class="timestamp">Waiting since ${session.timestamp}</span>
+                            <div class="actions">
+                                <button class="btn-approve" onclick="openApproveModal('${session.session_id}', '${session.pr_number}', \`${encodeURIComponent(session.technical_review)}\`)">
+                                    Approve
+                                </button>
+                                <button class="btn-reject" onclick="takeAction('${session.session_id}', 'REJECT', this)">
+                                    Reject
+                                </button>
+                            </div>
                         </div>
                     </div>
                 `).join('');
@@ -586,11 +814,9 @@ async def read_root():
                 currentSessionId = sessionId;
                 document.getElementById('modal-pr-title').innerText = `Technical Review for PR #${prNumber}`;
 
-                // Decode and render simple markdown (paragraphs/headers/lists)
                 const markdown = decodeURIComponent(encodedReview);
                 document.getElementById('modal-content').innerHTML = parseMarkdown(markdown);
 
-                // Attach submit handler to action button
                 const approveBtn = document.getElementById('modal-approve-btn');
                 approveBtn.onclick = () => {
                     takeAction(sessionId, 'APPROVE', approveBtn);
@@ -610,7 +836,7 @@ async def read_root():
             async function takeAction(sessionId, decision, element) {
                 const originalText = element.innerHTML;
                 element.disabled = true;
-                element.innerHTML = `<span class="spinner"></span> Processing...`;
+                element.innerHTML = `<span class="spinner"></span>`;
 
                 try {
                     const response = await fetch(`/api/action/${sessionId}`, {
