@@ -317,13 +317,20 @@ async def handle_action(session_id: str, payload: ActionRequest):
             decision_text = "Yes" if payload.decision.upper() == "APPROVE" else "No"
             user_id = await find_session_user_id(session_id) or "default-user-id"
 
-            # 1. Append the event locally/internally via session service
+            # 1. Fetch the full session to extract the latest event and its invocation_id
             session = await session_service.get_session(
                 app_name="app",
                 user_id=user_id,
                 session_id=session_id
             )
+
+            latest_event = session.events[-1] if session.events else None
+            invocation_id = getattr(latest_event, "invocation_id", None) or str(uuid.uuid4())
+
+            # 2. Append the event locally/internally via session service with required properties
             user_event = Event(
+                author="user",
+                invocation_id=invocation_id,
                 content=types.Content(
                     role="user",
                     parts=[types.Part.from_text(text=decision_text)]
@@ -332,7 +339,7 @@ async def handle_action(session_id: str, payload: ActionRequest):
             await session_service.append_event(session=session, event=user_event)
             await session_service.flush()
 
-            # 2. Query Reasoning Engine streamQuery to resume the actual execution run
+            # 3. Query Reasoning Engine streamQuery to resume the actual execution run
             import google.auth
             import google.auth.transport.requests
             import httpx
@@ -1074,6 +1081,21 @@ async def read_root():
                     .replace(/- (.*)/g, '<li>$1</li>')
                     .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
                     .replace(/\n/g, '<br>');
+            }
+
+            // Initial Toast Functionality
+            function showToast(message, isError = false) {
+                const container = document.getElementById('toast-container');
+                const toast = document.createElement('div');
+                toast.className = 'toast';
+                if (isError) {
+                    toast.style.background = 'var(--danger)';
+                }
+                toast.innerText = message;
+                container.appendChild(toast);
+                setTimeout(() => {
+                    toast.remove();
+                }, 4500);
             }
 
             // Initial Load
