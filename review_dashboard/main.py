@@ -102,6 +102,24 @@ async def get_pending_sessions():
 
     # If no real sessions found, fallback to mock list for demo / offline playground testing
     if not pending:
+        global MOCK_SESSIONS
+        if not MOCK_SESSIONS:
+            MOCK_SESSIONS = [
+                {
+                    "session_id": "mock-session-1",
+                    "pr_url": "https://github.com/google/adk/pull/12",
+                    "pr_number": 12,
+                    "technical_review": "### STRIDE Security Findings\n\n- **[HIGH] Tampering** in `usb_handler.cc:42-58`:\n  *Threat:* Potential buffer overflow in USB connection packet parsing.\n  *Remediation:* Enforce strict size verification on the payload header length.\n\n- **[MEDIUM] Information Disclosure** in `adk_config.json:14`:\n  *Threat:* Hardcoded default pre-shared key (PSK) found in configuration template.\n  *Remediation:* Load configurations from environmental variables dynamically.",
+                    "executive_summary": "This pull request refactors the JNI state lifecycle listener bindings and improves hardware connection recovery timeouts for Android 13+ devices."
+                },
+                {
+                    "session_id": "mock-session-2",
+                    "pr_url": "https://github.com/google/adk/pull/15",
+                    "pr_number": 15,
+                    "technical_review": "### STRIDE Security Findings\n\nNo security vulnerabilities or leaks identified in this change. Code complies with CONTEXT.md guidelines.",
+                    "executive_summary": "Integrates Firebase authentication flow, adds OAuth2 configuration endpoints, and migrates session storage to Redis."
+                }
+            ]
         pending = MOCK_SESSIONS
 
     return pending
