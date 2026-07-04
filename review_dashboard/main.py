@@ -85,13 +85,11 @@ except Exception as e:
     logger.warning(f"Could not initialize VertexAiSessionService: {e}. Falling back to mock sessions.")
 
 def parse_severity(tech_review: str) -> str:
-    lines = [line.strip() for line in tech_review.split("\n") if line.strip()]
-    if not lines:
-        return "APPROVE"
-    last_line = lines[-1].upper()
-    if "BLOCK" in last_line:
+    # Check for keywords inside the findings
+    tech_review_upper = tech_review.upper()
+    if "CRITICAL" in tech_review_upper or "HIGH" in tech_review_upper or "BLOCK" in tech_review_upper:
         return "BLOCK"
-    elif "APPROVE WITH CHANGES" in last_line:
+    elif "MEDIUM" in tech_review_upper or "APPROVE WITH CHANGES" in tech_review_upper:
         return "APPROVE WITH CHANGES"
     return "APPROVE"
 
@@ -204,20 +202,45 @@ async def get_pending_sessions():
                     continue
 
                 is_pending = False
+                latest_event = None
                 if full_session.events:
-                    latest_event: Event = full_session.events[-1]
-                    if getattr(latest_event, "interrupted", False):
+                    latest_event = full_session.events[-1]
+                    if (getattr(latest_event, "interrupted", False) or
+                        getattr(latest_event, "long_running_tool_ids", None)):
                         is_pending = True
 
-                if is_pending:
+                if is_pending and latest_event:
                     state = full_session.state or {}
-                    pr_summary = state.get("pr_summary", {})
                     tech_review = state.get("technical_review", "")
+                    pr_summary = state.get("pr_summary", {})
+
+                    # Robust fallback: extract review text directly from the adk_request_input tool call message
+                    if not tech_review and latest_event.content and latest_event.content.parts:
+                        for part in latest_event.content.parts:
+                            if (getattr(part, "function_call", None) and
+                                part.function_call.name == "adk_request_input"):
+                                args = part.function_call.args or {}
+                                tech_review = args.get("message", "")
+                                break
+
+                    # If we don't have an executive summary structure in state, parse it from review text
+                    exec_summary = pr_summary.get("purpose", "")
+                    if not exec_summary and tech_review:
+                        # Grab text under "### Executive Summary"
+                        if "### Executive Summary" in tech_review:
+                            try:
+                                exec_summary = tech_review.split("### Executive Summary")[1].split("###")[0].strip()
+                            except Exception:
+                                pass
+
+                    if not exec_summary:
+                        exec_summary = "Technical review is awaiting approval before posting."
 
                     time_str = "10:00"
                     try:
                         if getattr(full_session, "last_update_time", None):
-                            time_str = full_session.last_update_time.strftime("%H:%M")
+                            import datetime
+                            time_str = datetime.datetime.fromtimestamp(full_session.last_update_time).strftime("%H:%M")
                     except Exception:
                         pass
 
@@ -227,7 +250,7 @@ async def get_pending_sessions():
                         "pr_url": f"https://github.com/{state.get('repo', 'unknown')}/pull/{state.get('pr_number', 0)}",
                         "pr_number": state.get("pr_number", 0),
                         "technical_review": tech_review or "No technical review available.",
-                        "executive_summary": pr_summary.get("purpose", "No summary available."),
+                        "executive_summary": exec_summary,
                         "timestamp": time_str
                     })
         except Exception as e:
@@ -293,7 +316,8 @@ async def handle_action(session_id: str, payload: ActionRequest):
         try:
             decision_text = "Yes" if payload.decision.upper() == "APPROVE" else "No"
             user_id = await find_session_user_id(session_id) or "default-user-id"
-            # get_session, append_event and flush are async coroutines so they must be awaited!
+
+            # 1. Append the event locally/internally via session service
             session = await session_service.get_session(
                 app_name="app",
                 user_id=user_id,
@@ -307,7 +331,60 @@ async def handle_action(session_id: str, payload: ActionRequest):
             )
             await session_service.append_event(session=session, event=user_event)
             await session_service.flush()
-            return {"status": "success", "message": f"Session {session_id} resumed with '{decision_text}'"}
+
+            # 2. Query Reasoning Engine streamQuery to resume the actual execution run
+            import google.auth
+            import google.auth.transport.requests
+            import httpx
+
+            credentials, project = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            auth_req = google.auth.transport.requests.Request()
+            credentials.refresh(auth_req)
+            token = credentials.token
+
+            url = f"https://us-central1-aiplatform.googleapis.com/v1/{AGENT_RUNTIME_ID}:streamQuery"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+
+            agent_request = {
+                "session_id": session_id,
+                "message": {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": decision_text
+                        }
+                    ]
+                }
+            }
+
+            body = {
+                "class_method": "streaming_agent_run_with_events",
+                "input": {
+                    "request_json": json.dumps(agent_request)
+                }
+            }
+
+            logger.info(f"Forwarding resumption to Vertex AI reasoning engine: {url}")
+            async with httpx.AsyncClient() as client:
+                async with client.stream("POST", url, json=body, headers=headers, timeout=120.0) as response:
+                    logger.info(f"Vertex AI resumption status: {response.status_code}")
+                    if response.status_code >= 400:
+                        error_bytes = await response.aread()
+                        raise HTTPException(
+                            status_code=response.status_code,
+                            detail=f"Vertex AI resumption error: {error_bytes.decode('utf-8')}"
+                        )
+
+                    # Consume stream until the agent completes execution
+                    async for line in response.aiter_lines():
+                        pass
+
+            return {"status": "success", "message": f"Session {session_id} successfully resumed and executed with '{decision_text}'"}
         except Exception as e:
             logger.error(f"Failed to resume session {session_id} via API: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to resume session: {e}")
