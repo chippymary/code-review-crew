@@ -983,7 +983,7 @@ async def read_root():
                         <div class="card-meta">
                             <span class="timestamp">Waiting since ${session.timestamp}</span>
                             <div class="actions">
-                                <button class="btn-approve" onclick="openApproveModal('${session.session_id}', '${session.pr_number}', \`${encodeURIComponent(session.technical_review)}\`)">
+                                <button class="btn-approve" onclick="openApproveModal('${session.session_id}', '${session.pr_number}', '${encodeURIComponent(session.technical_review)}')">
                                     Approve
                                 </button>
                                 <button class="btn-reject" onclick="takeAction('${session.session_id}', 'REJECT', this)">
@@ -1003,6 +1003,10 @@ async def read_root():
                 document.getElementById('modal-content').innerHTML = parseMarkdown(markdown);
 
                 const approveBtn = document.getElementById('modal-approve-btn');
+                // Reset spinner state & disabled state on opening the modal
+                approveBtn.disabled = false;
+                approveBtn.innerHTML = 'Approve & Publish to GitHub';
+
                 approveBtn.onclick = () => {
                     takeAction(sessionId, 'APPROVE', approveBtn);
                     closeModal();
