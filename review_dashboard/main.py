@@ -22,6 +22,9 @@ AGENT_RUNTIME_ID = os.getenv(
 )
 LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
+# Extract the numeric engine ID from the path if a path was provided
+engine_id = AGENT_RUNTIME_ID.split("/")[-1] if "/" in AGENT_RUNTIME_ID else AGENT_RUNTIME_ID
+
 # Mock database to allow local testing and fallbacks
 MOCK_SESSIONS = [
     {
@@ -59,13 +62,13 @@ class ActionRequest(BaseModel):
 # Session Service initialization
 session_service = None
 try:
-    if GOOGLE_CLOUD_PROJECT and AGENT_RUNTIME_ID:
+    if GOOGLE_CLOUD_PROJECT and engine_id:
         session_service = VertexAiSessionService(
             project=GOOGLE_CLOUD_PROJECT,
             location=LOCATION,
-            app_name=AGENT_RUNTIME_ID
+            agent_engine_id=engine_id
         )
-        logger.info(f"Initialized VertexAiSessionService for project={GOOGLE_CLOUD_PROJECT}, app={AGENT_RUNTIME_ID}")
+        logger.info(f"Initialized VertexAiSessionService for project={GOOGLE_CLOUD_PROJECT}, engine_id={engine_id}")
 except Exception as e:
     logger.warning(f"Could not initialize VertexAiSessionService: {e}. Falling back to mock sessions.")
 
@@ -87,7 +90,8 @@ async def get_pending_sessions():
     # Try querying Vertex AI Session Service if initialized
     if session_service:
         try:
-            response = session_service.list_sessions(app_name=AGENT_RUNTIME_ID)
+            # list_sessions is an async coroutine, so it must be awaited!
+            response = await session_service.list_sessions(app_name="code-review-agent")
             sessions: List[Session] = getattr(response, "sessions", [])
             for s in sessions:
                 is_pending = False
@@ -179,15 +183,16 @@ async def handle_action(session_id: str, payload: ActionRequest):
     if session_service:
         try:
             decision_text = "Yes" if payload.decision.upper() == "APPROVE" else "No"
-            session = session_service.get_session(session_id=session_id)
+            # get_session, append_event and flush are async coroutines so they must be awaited!
+            session = await session_service.get_session(session_id=session_id)
             user_event = Event(
                 content=types.Content(
                     role="user",
                     parts=[types.Part.from_text(text=decision_text)]
                 )
             )
-            session_service.append_event(session=session, event=user_event)
-            session_service.flush()
+            await session_service.append_event(session=session, event=user_event)
+            await session_service.flush()
             return {"status": "success", "message": f"Session {session_id} resumed with '{decision_text}'"}
         except Exception as e:
             logger.error(f"Failed to resume session {session_id} via API: {e}")
