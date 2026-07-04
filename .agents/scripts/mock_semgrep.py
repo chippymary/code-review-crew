@@ -1,5 +1,6 @@
-import sys
 import re
+import sys
+
 
 def main():
     files_to_scan = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
@@ -11,15 +12,15 @@ def main():
 
     for filepath in files_to_scan:
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(filepath, encoding="utf-8") as f:
                 content = f.read()
 
                 # Check for GCP API Key
                 gcp_match = gcp_pattern.search(content)
                 if gcp_match:
                     print(f"\n{filepath}")
-                    print(f"  severity:warning")
-                    print(f"  rule:generic.secret.gcp-api-key")
+                    print("  severity:warning")
+                    print("  rule:generic.secret.gcp-api-key")
                     print(f"    Detected GCP API key: {gcp_match.group(0)}")
                     found_secrets = True
 
@@ -27,8 +28,8 @@ def main():
                 github_match = github_pattern.search(content)
                 if github_match:
                     print(f"\n{filepath}")
-                    print(f"  severity:warning")
-                    print(f"  rule:generic.secret.github-pat")
+                    print("  severity:warning")
+                    print("  rule:generic.secret.github-pat")
                     print(f"    Detected GitHub PAT: {github_match.group(0)}")
                     found_secrets = True
         except Exception:
@@ -40,6 +41,7 @@ def main():
     else:
         print("Semgrep Scan Passed: No secrets found.")
         sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

@@ -96,12 +96,17 @@ async def security_screen(ctx: Context, node_input: types.Content) -> Event:
     repo = "google/adk"
     pr_number = 12
 
+    mock_diff = None
+    mock_description = None
+
     try:
         if node_input and node_input.parts:
             text = node_input.parts[0].text
             data = json.loads(text)
             repo = data.get("repo", repo)
             pr_number = int(data.get("pr_number", pr_number))
+            mock_diff = data.get("mock_diff")
+            mock_description = data.get("mock_description")
     except Exception:
         repo = ctx.state.get("repo", repo)
         pr_number = ctx.state.get("pr_number", pr_number)
@@ -115,40 +120,51 @@ async def security_screen(ctx: Context, node_input: types.Content) -> Event:
     pr_details = {}
     diff_content = ""
 
-    # Fetch PR data from GitHub API with mock fallback
-    try:
-        headers = {
-            "Authorization": f"Bearer {github_token}" if github_token else "",
-            "Accept": "application/vnd.github.v3+json",
-        }
-        async with httpx.AsyncClient() as client:
-            res = await client.get(
-                f"https://api.github.com/repos/{repo}/pulls/{pr_number}",
-                headers=headers,
-                timeout=10.0,
-            )
-            if res.status_code == 200:
-                pr_details = res.json()
-
-            headers_diff = {
-                "Authorization": f"Bearer {github_token}" if github_token else "",
-                "Accept": "application/vnd.github.v3.diff",
-            }
-            res_diff = await client.get(
-                f"https://api.github.com/repos/{repo}/pulls/{pr_number}",
-                headers=headers_diff,
-                timeout=10.0,
-            )
-            if res_diff.status_code == 200:
-                diff_content = res_diff.text
-    except Exception as e:
-        # Fallback Mock PR data for testing
+    # Check for Test Mode to run local offline playground checks (F-03/Playground testing)
+    if os.getenv("TEST_MODE", "false").lower() == "true" and (
+        mock_diff is not None or mock_description is not None
+    ):
         pr_details = {
-            "title": "Mock Pull Request for testing",
-            "body": "This is a mock pull request containing stable connection updates and JNI validation tests.",
-            "changed_files": 2,
+            "title": "Mocked Local Playground PR",
+            "body": mock_description or "Offline test mode PR description.",
+            "changed_files": 1,
         }
-        diff_content = """diff --git a/auth/auth_service.py b/auth/auth_service.py
+        diff_content = mock_diff or ""
+    else:
+        # Fetch PR data from GitHub API with mock fallback
+        try:
+            headers = {
+                "Authorization": f"Bearer {github_token}" if github_token else "",
+                "Accept": "application/vnd.github.v3+json",
+            }
+            async with httpx.AsyncClient() as client:
+                res = await client.get(
+                    f"https://api.github.com/repos/{repo}/pulls/{pr_number}",
+                    headers=headers,
+                    timeout=10.0,
+                )
+                if res.status_code == 200:
+                    pr_details = res.json()
+
+                headers_diff = {
+                    "Authorization": f"Bearer {github_token}" if github_token else "",
+                    "Accept": "application/vnd.github.v3.diff",
+                }
+                res_diff = await client.get(
+                    f"https://api.github.com/repos/{repo}/pulls/{pr_number}",
+                    headers=headers_diff,
+                    timeout=10.0,
+                )
+                if res_diff.status_code == 200:
+                    diff_content = res_diff.text
+        except Exception as e:
+            # Fallback Mock PR data for testing
+            pr_details = {
+                "title": "Mock Pull Request for testing",
+                "body": "This is a mock pull request containing stable connection updates and JNI validation tests.",
+                "changed_files": 2,
+            }
+            diff_content = """diff --git a/auth/auth_service.py b/auth/auth_service.py
 index 012345..6789ab 100644
 --- a/auth/auth_service.py
 +++ b/auth/auth_service.py
