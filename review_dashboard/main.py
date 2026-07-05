@@ -150,13 +150,12 @@ async def pubsub_webhook(envelope: PubSubEnvelope):
 
 @app.post("/api/demo/trigger")
 async def trigger_demo_review():
+    import google.auth
+    import google.auth.transport.requests
+    import httpx
+
     try:
-        from google.cloud import pubsub_v1
-        import json
-
-        publisher = pubsub_v1.PublisherClient()
-        topic_path = publisher.topic_path(GOOGLE_CLOUD_PROJECT, "pr-review-requests")
-
+        # Prepare the mock PR payload
         payload = {
             "pr_url": "https://github.com/test/repo/pull/22",
             "repo": "test/repo",
@@ -165,14 +164,62 @@ async def trigger_demo_review():
             "pr_description": "Add S3 upload feature with credentials"
         }
 
-        data = json.dumps(payload).encode("utf-8")
-        future = publisher.publish(topic_path, data)
-        msg_id = future.result()
-        logger.info(f"Demo PR Review triggered via dashboard. Message ID: {msg_id}")
-        return {"status": "success", "message": f"Demo review request triggered successfully. Msg ID: {msg_id}"}
+        # Get credentials and token
+        credentials, project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        auth_req = google.auth.transport.requests.Request()
+        credentials.refresh(auth_req)
+        token = credentials.token
+
+        url = f"https://us-central1-aiplatform.googleapis.com/v1/{AGENT_RUNTIME_ID}:streamQuery"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+
+        # Generate a unique session ID
+        session_uuid = str(uuid.uuid4())
+
+        agent_request = {
+            "session_id": f"sess-{session_uuid}",
+            "message": {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": json.dumps(payload)
+                    }
+                ]
+            }
+        }
+
+        body = {
+            "class_method": "streaming_agent_run_with_events",
+            "input": {
+                "request_json": json.dumps(agent_request)
+            }
+        }
+
+        logger.info(f"Triggering demo review directly via Vertex AI Reasoning Engine: {url}")
+        async with httpx.AsyncClient() as client:
+            async with client.stream("POST", url, json=body, headers=headers, timeout=120.0) as response:
+                logger.info(f"Vertex AI trigger status: {response.status_code}")
+                if response.status_code >= 400:
+                    error_bytes = await response.aread()
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Vertex AI trigger error: {error_bytes.decode('utf-8')}"
+                    )
+
+                # Consume only the first line of the stream
+                async for line in response.aiter_lines():
+                    logger.info(f"Agent stream connection established. First event: {line[:120]}...")
+                    break
+
+        return {"status": "success", "message": "Demo review request triggered successfully."}
     except Exception as e:
         logger.error(f"Failed to trigger demo review: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to trigger demo review: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/pending")
 async def get_pending_sessions():
