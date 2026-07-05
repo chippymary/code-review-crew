@@ -2,6 +2,9 @@
 
 An ambient, multi-agent code reviewer that automatically analyzes GitHub Pull Requests the moment they are opened, catches security vulnerabilities using the STRIDE threat modeling framework, and always requires human approval before posting reviews back to GitHub.
 
+## Video Demo
+🎥 **[Watch the 4-Minute YouTube Demo Video](https://youtu.be/GbizNRIHEkY)**
+
 ## The Problem
 Manual code review is one of the most significant bottlenecks in modern software development pipelines, often delaying releases and increasing lead times. Moreover, developers frequently miss critical security flaws—like buffer overflows or exposed API credentials—due to alert fatigue or lack of specialized security training. Relying solely on manual oversight increases the risk of deploying vulnerable code to production.
 

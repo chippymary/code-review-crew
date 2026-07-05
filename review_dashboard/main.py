@@ -148,6 +148,32 @@ async def pubsub_webhook(envelope: PubSubEnvelope):
         logger.error(f"Error handling webhook: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/demo/trigger")
+async def trigger_demo_review():
+    try:
+        from google.cloud import pubsub_v1
+        import json
+
+        publisher = pubsub_v1.PublisherClient()
+        topic_path = publisher.topic_path(GOOGLE_CLOUD_PROJECT, "pr-review-requests")
+
+        payload = {
+            "pr_url": "https://github.com/test/repo/pull/22",
+            "repo": "test/repo",
+            "pr_number": 22,
+            "diff_text": "import boto3\nAWS_KEY = 'AKIAIOSFODNN7EXAMPLE'\nAWS_SECRET_ACCESS_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'",
+            "pr_description": "Add S3 upload feature with credentials"
+        }
+
+        data = json.dumps(payload).encode("utf-8")
+        future = publisher.publish(topic_path, data)
+        msg_id = future.result()
+        logger.info(f"Demo PR Review triggered via dashboard. Message ID: {msg_id}")
+        return {"status": "success", "message": f"Demo review request triggered successfully. Msg ID: {msg_id}"}
+    except Exception as e:
+        logger.error(f"Failed to trigger demo review: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger demo review: {e}")
+
 @app.get("/api/pending")
 async def get_pending_sessions():
     pending = []
@@ -793,9 +819,14 @@ async def read_root():
                 <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.25rem;">Ambient Pull Request Review Approvals Manager</p>
             </div>
 
-            <div class="status-indicator">
-                <div class="pulse-dot"></div>
-                <span>Agent Runtime: Live</span>
+            <div style="display: flex; gap: 1rem; align-items: center;">
+                <button class="btn-approve" onclick="triggerDemoReview(this)" style="padding: 0.5rem 1rem; font-size: 0.85rem; height: fit-content; border-radius: 9999px;">
+                    Trigger Demo Review
+                </button>
+                <div class="status-indicator">
+                    <div class="pulse-dot"></div>
+                    <span>Agent Runtime: Live</span>
+                </div>
             </div>
 
             <div class="badge" id="pending-count">0 pending reviews</div>
@@ -828,7 +859,7 @@ async def read_root():
 
         <footer>
             <p>Built with Google ADK 2.0 &middot; Antigravity &middot; Agent Runtime</p>
-            <p>Code Repository: <a href="https://github.com/chippymary/code-review-crew" target="_blank">chippymary/code-review-crew</a></p>
+            <p>Code Repository: <a href="https://github.com/chippymary/code-review-crew" target="_blank">chippymary/code-review-crew</a> &middot; Demo Video: <a href="https://youtu.be/GbizNRIHEkY" target="_blank">YouTube Video</a></p>
             <p style="margin-top: 0.25rem; font-size: 0.775rem; opacity: 0.8;">Kaggle 5-Day AI Agents Capstone 2026</p>
         </footer>
 
@@ -883,7 +914,10 @@ async def read_root():
                         <div class="empty-state">
                             <div class="checkmark-icon">✓</div>
                             <h3>All Clear</h3>
-                            <p>No pull requests awaiting approval. The agent is actively monitoring.</p>
+                            <p style="margin-bottom: 1.5rem;">No pull requests awaiting approval. The agent is actively monitoring.</p>
+                            <button class="btn-approve" onclick="triggerDemoReview(this)" style="max-width: 240px; padding: 0.7rem 1.5rem;">
+                                Trigger Demo PR Review
+                            </button>
                         </div>
                     `;
                     return;
@@ -990,6 +1024,36 @@ async def read_root():
                     showToast("Network error. Action aborted.", true);
                     element.disabled = false;
                     element.innerHTML = originalText;
+                }
+            }
+
+            async function triggerDemoReview(btn) {
+                const originalText = btn.innerHTML;
+                btn.disabled = true;
+                btn.innerHTML = `<span class="spinner" style="width: 12px; height: 12px;"></span>`;
+
+                try {
+                    const response = await fetch('/api/demo/trigger', {
+                        method: 'POST'
+                    });
+
+                    if (response.ok) {
+                        showToast("Demo PR Review Triggered! Card will appear in 3s...");
+                        setTimeout(() => {
+                            fetchPending();
+                            btn.disabled = false;
+                            btn.innerHTML = originalText;
+                        }, 3000);
+                    } else {
+                        showToast("Failed to trigger demo review.", true);
+                        btn.disabled = false;
+                        btn.innerHTML = originalText;
+                    }
+                } catch (error) {
+                    console.error("Error triggering demo review:", error);
+                    showToast("Network error.", true);
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
                 }
             }
 
